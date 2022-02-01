@@ -1,0 +1,277 @@
+---
+title: 'Predictors and Perception: An Analysis of Gender, Trajectory, and Personal
+  Responsibility on Income'
+author: "Zander Taylor"
+date: "2/28/2021"
+output:
+  pdf_document: default
+  html_document: default
+---
+<style type="text/css">
+
+h1.title {
+  text-align: center;
+}
+h4.author { /* Header 4 - and the author and data headers use this too  */
+  font-size: 18px;
+  text-align: center;
+}
+h4.date {
+  font-size: 18px;
+  text-align: center;
+}
+</style>
+
+## Introduction
+This report seeks to evaluate the influence that gender, life trajectories, and perceptions of personal responsibility have on an individual's income. Upward social mobility is a growing issue in the United States, as research has shown a decline in inter-generational mobility in recent decades^[[Chetty, Hendren, Kline & Seaz (2014)](https://www.nber.org/papers/w19843)]. Nevertheless, public opinion in the United States often praises the success stories of individuals who rose out of poverty into prominent members of society. However, research has shown that these perceptions are often overestimated^[[Alesina, Stantcheva, & Teso (2018)](https://insight.kellogg.northwestern.edu/article/how-closely-do-our-beliefs-about-social-mobility-match-reality)].
+
+Oftentimes, your income is influenced by inherent and external factors. In an oft-referenced report, Nunn et. al^[[Nunn, Johnson, Monro, Bickerstaffe, & Kelsey (2007)](https://core.ac.uk/download/pdf/29018987.pdf)] found that access to education and motivation are some of the many significant factors that influence social mobility. In order to test the effect that social factors influence social mobility, we will analyze the NLSY97 dataset. The NLSY97 is a longitudinal study of youths beginning in 1997, where youths were studied from approximately 12-14 years old until they were in their thirties. The longitudinal study has continued through 2017, where we can analyze an individual's income and overall well-being. This dataset provides robust data to evaluate whether social factors affect their income later in life.
+
+In order to determine our variables to predict a person's income, we will analyze variables that may be indicative of a person's life outcomes beginning at their youth. These variables include *Chance of Being a Parent by 20*, *Chance of Graduating College by 30*, and *Chance of Going to Jail by 20*. We will also analyze survey questions related to personal responsibility. This is so we can test whether certain perceptions on life affect a person's income.
+
+#### Import packages and dataset
+
+First, we will import our packages and import our dataset. 
+
+```{r, message = FALSE, warning = FALSE}
+# Import packages
+library(knitr)
+library(tidyverse)
+library(dplyr)
+library(mice)
+library(htmlTable)
+library(VIM)
+library(cowplot)
+library(reshape2)
+
+full_nlsy <- as_tibble(read.csv("nlsy97_Feb2021.csv", header = TRUE, row.names = 'R0000100')) # Sets pubID as index column
+```
+
+Next, we will rename our columns. First, we will select the columns using the native column names and create a new dataset. We can then rename our columns that is more intuitive to our analysis.
+
+```{r}
+#Select and rename variables
+
+cols <- c('R0514900', 'R0515100', 'R0514800', 'R0536300', 'R1482600',
+          'U2857200', 'T1069100', 'T1069101', 'T1069102', 'T1069103')
+
+nlsy <- full_nlsy %>%
+  select(all_of(cols))
+
+colnames(nlsy) <- c(
+    'chanceJailBy20',
+    'chanceParentBy20',
+    'chanceDegreeBy30',
+    'gender',
+    'race',
+    'income',
+    'helpOthersLessFortunate',
+    'othersCareForThemselves',
+    'helpingOthersImportant',
+    'othersLookAfterThemselves')
+```
+
+## Methods and Pre-Processing
+
+#### Missing value imputation
+
+Before we get descriptive statistics, we need to look into our missing values. Based on the output dataframe below and the nature of the NLSY dataset, several of our columns are representing missing values as negative integers. These values affect our descriptive statistics and thus any future tests we conduct.
+
+```{r}
+# Count of Negative Values
+as.matrix(lapply(nlsy, function(x) {length(which(x < 0))})) %>%
+  htmlTable(caption = 'Count of Negative Values, by Column')
+```
+
+Before we impute our missing data, we must recode these missing values. To do this, we will turn any negative integers into missing values. This will not affect any meaningful values for us, because the hard minimum for our dataset is 0.
+
+```{r}
+nlsy[nlsy < 0] <- NA
+```
+
+Now that we have converted negative values to missing values, we will visualize our missing values using the Visualizations and Imputation of Missing Values (VIM) package. This visualization shows us all patterns of complete values (navy blue) and missing values (yellow) between our columns. This is followed closely to Analytics Vidhya's model^[[Analytics Vidya (2016)](https://www.analyticsvidhya.com/blog/2016/03/tutorial-powerful-packages-imputing-missing-values/)].
+
+```{r}
+# Visualization of Missing Value Patterns
+nlsyVIM <- aggr(nlsy, col = c('navyblue', 'yellow'),
+                 numbers = TRUE, sortVars = TRUE,
+                 labels = names(nlsy), cex.axis = 0.7, oma = c(10, 5, 1, 1),
+                 gap = 3, ylab = c('Missing data', 'Pattern'))
+```
+Based on our visualization, we find that our survey questions (*othersLookAfterThemselves*, *othersCareForThemselves*, etc.) have missing values of around 80%, whereas some columns have missing values of around 60%. Finally, our dependent variable (*income*) has a percent of missing values of 43%. Fortunately, our *gender* and *race* variables have no missing values.
+
+In order to impute our missing values, we will using use a Multivariate Imputation by Chained Equations (MICE) package. In this package, they have a imputation method that is specific for monotonic data imputation. Monotone data pattern is where: if $Y_j$ is missing, $Y_k$ and all subsequent values after $Y_j$ are also missing^[[Stefvan Van Buuren (2018)](https://stefvanbuuren.name/fimd/missing-data-pattern.html)]. This missing data pattern is very common in longitudinal studies, where participants drop out. We will assume our missing data is monotone in nature, and thus, we will impute our data to tune this element.
+
+```{r}
+nlsyIMP <- mice(nlsy, m = 5, maxit = 1, visit = 'monotone', print = FALSE)
+  # 5 imputations, 1 iteration of imputations
+
+nlsy <- complete(nlsyIMP, 1) # taking first iteration of missing value imputation
+
+as.matrix(lapply(nlsy, function(x) {length(which(is.na(x)))})) %>%
+  htmlTable(caption = 'Count of NA Values, by Column') # chart to see values that are NA
+```
+
+As we can see from our data, we no longer have any missing values, we will recode our categorical variables so they are no longer integer values.
+
+#### Recode categorical variables
+
+We will recode our categorical variables from integers to factors. This leaves us with four variables that are still integer variables: *chanceJailBy20*, *chanceParentBy20*, *chanceDegreeBy30* and our outcome variable *income*.
+
+```{r}
+# Recode categorical values
+nlsy <- nlsy %>%
+  mutate(gender = recode_factor(gender, `1` = 'male', `2` = 'female')) %>%
+  mutate(race = recode_factor(race, `1` = 'black', `2` = 'hispanic',
+                               `3` = 'mixed race',`4` = 'non-black, non-hispanic')) %>%
+  mutate_at(c('helpOthersLessFortunate', 'othersCareForThemselves',
+              'helpingOthersImportant', 'othersLookAfterThemselves'),
+            ~ recode_factor(.x, `0` = 'strongly disagree', `1` = 'disagree',
+                            `2` = 'neither agree nor disagree', `3` = 'agree',
+                            `4` = 'strongly agree'))
+```
+
+#### Income as our Outcome Variable
+
+Next, we will analyze our dependent variable, income. Based on a histogram of our variable, it appears we have several observations that skew our data to the right. Our QQ plot confirms a non-normal distribution and several outliers.
+
+```{r}
+par(mfrow = c(2,1))
+incomeHist <- ggplot(data = nlsy, aes(x = income)) +
+  geom_histogram(fill='blue',  alpha=0.8)
+
+incomeBox <- ggplot(data = nlsy, aes(sample = income)) +
+  stat_qq() + stat_qq_line()
+
+plot_grid(incomeHist, incomeBox) # set our grid to 1 row, 2 cols
+```
+
+In our codebook description, the top 2% of our income variable are top-coded, meaning any values beyond a maximum value (in this case $149,000) are averaged. In this case, the averaged values come to \$235,884. Because these variables will affect any mutations we use on variable, we will omit any values above \$149,000 and take the square-root of our income variable. This gives us a slightly more normalized histogram, though there is still some skewness in our QQ plot
+
+```{r}
+# Remove any values above $149,000 and square-root remaining values
+nlsy <- nlsy %>%
+  subset(income <= 149000) %>% # subset of all rows below $149000
+  mutate(income = sqrt(income)) # Square root income variable
+
+par(mfrow = c(2,1))
+incomeHist <- ggplot(data = nlsy, aes(x = income)) +
+  geom_histogram(fill='blue',  alpha=0.8) + 
+  ggtitle('Income Histogram, Sqrt Values')
+
+incomeBox <- ggplot(data = nlsy, aes(sample = income)) +
+  stat_qq() + stat_qq_line() + 
+  ggtitle('QQ Plot, Income')
+
+plot_grid(incomeHist, incomeBox)
+```
+
+#### Gender as our Independent Variable
+
+One of our primary tests is to see whether gender plays a signficant role in a person's income. So we will quickly analyze our *gender* variable. Based on our bar plot, it looks like we have a similar number of males and females in our sample and no manipulation to our *gender* variable is needed.
+
+```{r}
+# Gender bar plot
+ggplot(nlsy, aes(x = gender)) +
+  geom_bar(fill = c('blue', 'red')) +
+  labs(title = 'Count of Gender', x = 'gender', y = 'count')
+```
+
+## Tests and Regressions
+
+#### Is Income Statistically Different Between Genders?
+
+In this test, we will evaluate whether income is statistically different between male and female. In order to do this, we will use an independent t-test. This test is used to compare two independent samples (gender and income) to see whether the mean income values are statistically different between the group. Because our sample is normally distributed, we can use this test.
+
+```{r}
+nlsy %>%
+  group_by(gender) %>%
+  summarize(meanIncome = round(mean(income))^2) %>% # squared the mean value
+  htmlTable(caption = 'Mean Income, by Gender')
+```
+
+```{r}
+incomeGenderTest <- t.test(income ~ gender, data = nlsy)
+incomeGenderTest
+```
+
+Based on our table grouped by gender, our mean income for males is `r nlsy %>% filter(gender == 'male') %>% summarize(meanIncome = format(round(mean(income))^2), scientific = FALSE) %>% pull(meanIncome)` whereas mean income for females is `r nlsy %>% filter(gender == 'female') %>% summarize(meanIncome = format(round(mean(income))^2), scientific = FALSE) %>% pull(meanIncome)`. We decided to square the mean values in order to show the true dollar value, instead of the square-root value. And according to our t-test below, the mean incomes between male and female are statistically different. Our p-value of our test is `r round(incomeGenderTest$p.value, 4)`, which is statistically significant at 95% and 99% confidence.
+
+#### Influence of life expectations on income
+
+For our next test, we will evaluate how life expectations affect a person's income. Meaning, respondents were asked about certain school and life situations (being a parent, going to jail) and the probability of this occurring. This produces a percent chance that a person will a certain situation happening to them. To evaluate how life expectations influence income, we will run a multivariate linear regression including a select group of life expectations, gender, and race. This will omit all personal responsibility questions, as these will be tested separately.
+
+```{r}
+lmIncome <- lm(income ~ chanceJailBy20 + chanceParentBy20 +
+                 chanceDegreeBy30 + gender + race, data = nlsy)
+kable(summary(lmIncome)$coef, digits = c(3, 3, 3, 4), caption = 'Coefficients for Multivariate Linear Regression')
+```
+From our regression model, we find our model's adjusted R-squared is `r round(summary(lmIncome)$adj.r.squared, 4)`, which means that our model explains only `r round(summary(lmIncome)$adj.r.squared, 4) * 100`% of the variance in income variable. We would consider this to be a weak model, with such a low adjuted R-squared value. But there are some notable coefficients we can consider from this model.
+
+It looks like all but one variable is statistically significant at 99% confidence. Most notably, our *gender* variable reaffirms our findings from our t-test. The coefficient for our gender variable is `r round(coef(summary(lmIncome))['genderfemale', 'Estimate'], 2)`, meaning that a female would expect a income `r ifelse(coef(summary(lmIncome))['genderfemale', 'Estimate'] > 0, 'increase', 'decrease')` by `r abs(round(coef(summary(lmIncome))['genderfemale', 'Estimate'], 2))`$^2$ = \$`r abs(round(coef(summary(lmIncome))['genderfemale', 'Estimate']))^2`. Our p-value is also `r round(coef(summary(lmIncome))['genderfemale', 'Pr(>|t|)'], 2)`, which is statistically significant at 99% confidence.
+
+We find the coefficients for *ChanceJailBy20*, *chanceParentBy20*, and *ChanceDegreeBy30* are `r round(coef(summary(lmIncome))['chanceJailBy20', 'Estimate'], 2)`, `r round(coef(summary(lmIncome))['chanceParentBy20', 'Estimate'], 2)`, and `r round(coef(summary(lmIncome))['chanceDegreeBy30', 'Estimate'], 2)`, respectively, all of which are statistically significant. For example, as the probability of a person going to jail increases by 1%, their expected income is expected to `r ifelse(coef(summary(lmIncome))['chanceJailBy20', 'Estimate'] > 0, 'increase', 'decrease')` by `r abs(round(coef(summary(lmIncome))['chanceJailBy20', 'Estimate'], 2))`$^2$ = \$`r abs(round(coef(summary(lmIncome))['chanceJailBy20', 'Estimate'], 2))^2`. In total, these value do not appear to have much influence on a person's income, relative to other factors.
+
+```{r}
+# Diagnostic plots
+par(mfrow = c(2,2))
+plot(lmIncome)
+```
+
+Our diagnostic plot above shows us information about the fit and quality of our regression model. From our residual plot, it looks like we have a wide spread of points, indicative of a weak model. Our QQ plot shows us a slight skewness in our plot, which is indicative of our outcome variable (*income*). Our Scale-Location plot provides no discernible trend, though there are some trends that are noticeable behind the noise. Finally, in our Residual vs Leverage plot shows us some distinguished outliers which skew our data, but are not distinguished enough to omit these values.
+
+#### How Race Influences the Wage Disparity Between Genders
+
+What is interesting about this model is the variance between different races and ethnicities. Based on the table below, there are differences between races within each gender classification. In order to test this, we need to visualize and test how gender and race interact with income. To do this, we created a visual that expresses the mean and standard error 95% confidence interval for each race, grouped by gender. We followed this example from the R Graphic Cookbook to create an error plot to visualize the different income means by gender and race^[[Chang, Winston (2012)](http://www.cookbook-r.com/Graphs/Plotting_means_and_error_bars_(ggplot2)/)].
+
+```{r}
+nlsyToPlot <- nlsy %>%
+  group_by(gender, race) %>%
+  summarize(
+            meanIncome = mean(income),
+            seIncome = sd(income) / sqrt(n()),
+            lower = meanIncome - 2 * seIncome,
+            upper = meanIncome + 2 * seIncome)
+
+ggplot(nlsyToPlot, aes(x = race, y = meanIncome, fill = gender, color = gender)) +
+  geom_line(fill = c('blue', 'red')) +
+  geom_errorbar(width = 0.1, aes(ymin = lower, ymax = upper)) +
+  geom_point(shape = 21, size = 3, fill = 'white') +
+  ggtitle('Mean Income Error Plot at 95% Confidence, by Race') +
+  ylab('Mean Square-Rooted Income')
+```
+
+Our error plot, separated by race and gender, shows a clear picture of the income disparity between gender across different races and ethnicities. This visualization gives us aid in running and interpreting our linear regression.
+
+```{r}
+# Interaction between gender and race, based on income
+lmIncome.interact <- lm(income ~ gender * race, data = nlsy)
+
+kable(summary(lmIncome.interact)$coef, digits = c(3, 3, 3, 4), caption = 'Coefficients for Regression Interaction Between Gender and Race')
+```
+
+The results from our regression shows a valuable information about how race and gender play a role in income attainment. Within the male classification, we see that the coefficient for blackhispanic males is `r round(coef(summary(lmIncome.interact))['racehispanic', 'Estimate'], 2)`, compared to non-black, non-hispanic males at `r round(coef(summary(lmIncome.interact))['racenon-black, non-hispanic', 'Estimate'], 2)`. But as we have found through our earlier tests, the coefficients for female hispanics is `r round(coef(summary(lmIncome.interact))['racehispanic', 'Estimate'], 2)` - `r round(coef(summary(lmIncome.interact))['genderfemale:racehispanic', 'Estimate'], 2)` = `r abs(round(coef(summary(lmIncome.interact))['racehispanic', 'Estimate'], 2)) - abs(round(coef(summary(lmIncome.interact))['genderfemale:racehispanic', 'Estimate'], 2))`. All of these values are statistically significant at 95% confidence or higher, except for mixed race females with a p-value of `r round(coef(summary(lmIncome.interact))['genderfemale:racemixed race', 'Pr(>|t|)'], 2)`. This p-value is still statistically significant at 90% confidence though.
+
+#### Influence of Personal Responsibility on Income
+
+In our final test, we will analyze a person's opinion on personal responsibility and how their response affects their income. It is possible that people with a certain outlook on life may have more income, as this world view could influence their motivations and career outcomes. For this test, we will analyze our survey responses using an Analysis of Variance (ANOVA), using income as our outcome variable. It is worth noting that ANOVA should be calculated with our dependent variable being continuous (such as income) and our independent variables should be categorical (either nominal or ordinal)^[[Statistics Solutions](https://www.statisticssolutions.com/manova-analysis-anova/#:~:text=In%20ANOVA%2C%20the%20dependent%20variable,the%20data%20is%20normally%20distributed.)]
+
+```{r}
+aovIncome <- aov(income ~ helpOthersLessFortunate + othersCareForThemselves +
+                   helpingOthersImportant + othersLookAfterThemselves, data = nlsy)
+summary(aovIncome)
+```
+
+Based on our ANOVA test, it looks like one question, *Others should look after themselves*, was statistically significant in relation to income. This variable's p-value is `r round(summary(aovIncome)[[1]][4,5], 4)` which means that this is statistically significant at 99% confidence. Surprisingly, the response with the highest mean income are participants who Strongly Disagreed that people should look after themselves. There is an inverse relationship between people who strongly believe in looking after themselves and mean income. However, this is just one finding from this ANOVA, which overall finds little statistical significance.
+
+```{r}
+nlsy %>%
+  group_by(othersLookAfterThemselves) %>%
+  summarize(meanIncome = round(mean(income))^2) %>%
+  htmlTable(caption = 'People Look After Themselves')
+```
+## Discussion and Conclusion
+
+Despite several crucial findings, we must consider some limitations to our study. One glaring limitaion is that we ran our missing value imputation on 10 columns, out of the 90+ variables in the entire dataset. Similarly, we see that a signficant portion of our missing value pattern only had gender, race, and income to predict any missing values. It was convenient to subset our dataframe, taking only the variables we were analyzing, but this made our imputation less reliable as there was less data used to predict and impute our missing values. Further, we reached a more normalized *income* variable by omiting our topcoded income values, but this may have impacted our test results. We also only square-rooted our values, in order to keep our values interpretable, but there may have been other methods to normalize our *income* variable. One final limitation is that many of our variable were subjective, rather than objective measurements. Subjective questions such as *the likelihood someone will be a parent by 20* and *whether others should look out for themselves* may be hard to conceptualize for a young adult, and so our values and findings are limited by the participants' perceptions at that point in time.
+
+Nevertheless, this study provides meaningful information regarding income disparity between groups. While a young adult's perceptions of life outcomes may not influence their future income, we found very notable findings about income disparity between gender and race. This disparity likely points to life choices made by the participant such as the person's education and occupation, but there may be systemic issues underlying the data. More research would need to be conducted on factors related these groups. While our findings were mixed, there are elements to our results that would be worth sharing with stakeholders and policy makers.
